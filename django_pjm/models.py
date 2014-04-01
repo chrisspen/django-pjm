@@ -103,11 +103,11 @@ class Node(models.Model):
 
     def save(self, *args, **kwargs):
         
-#        if self.id:
-#            aggs = self.day_ahead_prices.all()\
-#                .aggregate(Min('start_datetime'), Max('start_datetime'))
-#            self.lmpda_start_datetime_min = aggs['start_datetime__min']
-#            self.lmpda_start_datetime_max = aggs['start_datetime__max']
+        if self.id:
+            aggs = self.day_ahead_prices.all()\
+                .aggregate(Min('start_datetime'), Max('start_datetime'))
+            self.lmpda_start_datetime_min = aggs['start_datetime__min']
+            self.lmpda_start_datetime_max = aggs['start_datetime__max']
             
         super(Node, self).save(*args, **kwargs)
         
@@ -150,6 +150,7 @@ class Node(models.Model):
 #            print url
             #data = urllib2.urlopen(url1).readlines()[6:]
             request = urllib2.Request(url)
+            print 'Downloading raw data from %s...' % (url,)
             response = urllib2.urlopen(request)
             content_type = response.info().getheader('Content-Type')
 #            print 'content_type1:',content_type
@@ -162,6 +163,7 @@ class Node(models.Model):
                 day=load_date.day)
 #            print url
             request = urllib2.Request(url)
+            print 'Downloading archived data from %s...' % (url,)
             response = urllib2.urlopen(request)
             content_type = response.info().getheader('Content-Type')
 #            print 'content_type2:',content_type
@@ -186,7 +188,7 @@ class Node(models.Model):
         for line in lines:
             i += 1
             if i == 1 or not i % 10:
-                print '\r%i of %i %.02f%%' % (i, total, i/float(total)*100),
+                print '\rProcessing line %i of %i %.02f%%.' % (i, total, i/float(total)*100),
                 sys.stdout.flush()
             try:
                 
@@ -269,6 +271,7 @@ class Node(models.Model):
                 raise
     
         print '\r%i of %i %.02f%%' % (total, total, 100),
+        print
         print 'Done!'
         sys.stdout.flush()
 
