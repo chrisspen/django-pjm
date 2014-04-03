@@ -98,3 +98,42 @@ class LMPDAAdmin(admin.ModelAdmin):
 admin.site.register(
     models.LMPDA,
     LMPDAAdmin)
+
+class LMPDAStatusAdmin(admin.ModelAdmin):
+    
+    list_display = (
+        'date',
+        'loaded_zones',
+    )
+    
+    list_filter = (
+        'date',
+        'loaded_zones',
+    )
+    
+    search_fields = (
+    )
+    
+    def has_delete_permission(self, request, obj=None):
+        return False
+    
+    def has_add_permission(self, request, obj=None):
+        return False
+    
+    def get_actions(self, request):
+        actions = super(LMPDAStatusAdmin, self).get_actions(request)
+        del actions['delete_selected']
+        return actions
+    
+    def get_readonly_fields(self, request, obj=None):
+        exclude = []
+        return [f.name for f in self.model._meta.fields if f.name not in exclude] + []
+    
+    def queryset(self, *args, **kwargs):
+        qs = super(LMPDAStatusAdmin, self).queryset(*args, **kwargs)
+        qs = qs._clone(klass=ApproxCountQuerySet)
+        return qs
+
+admin.site.register(
+    models.LMPDAStatus,
+    LMPDAStatusAdmin)

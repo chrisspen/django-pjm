@@ -133,7 +133,12 @@ class Node(models.Model):
         
         assert start_date <= end_date, 'Start date must be before end date.'
         while start_date <= end_date:
-            cls.load_date(load_date=start_date, only_type=only_type)
+            status, _ = LMPDAStatus.objects.get_or_create(date=start_date)
+            #TODO:add separate flags for loading other rows
+            if not status.loaded_zones:
+                cls.load_date(load_date=start_date, only_type=only_type)
+                status.loaded_zones = True
+                status.save()
             start_date += timedelta(days=1)
 
     @classmethod
@@ -241,6 +246,8 @@ class Node(models.Model):
                 for name, hour, value in price_fields:
                     if not hour.strip():
                         continue
+                    if not value.strip():
+                        continue
                     price_dict[int(hour)/100][FIELD_MAP[name.strip()]] = value
                 for hour, price_data in price_dict.iteritems():
                     # Hours are in Eastern Prevailing Time (EPT), which has
@@ -275,6 +282,25 @@ class Node(models.Model):
         print 'Done!'
         sys.stdout.flush()
 
+class LMPDAStatus(models.Model):
+    
+    date = models.DateField(
+        blank=False,
+        null=False,
+        unique=True,
+        editable=False,
+        db_index=True)
+    
+    loaded_zones = models.BooleanField(
+        default=False,
+        editable=False,
+        db_index=True)
+    
+    class Meta:
+        app_label = APP_LABEL
+        verbose_name = _('day-ahead locational marginal price import status')
+        verbose_name_plural = _('day-ahead locational marginal prices import statuses')
+    
 class LMPDA(models.Model):
     """
     Stores location marginal price day-ahead data published at

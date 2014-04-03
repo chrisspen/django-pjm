@@ -13,3 +13,5 @@ TYPES = (
     LOAD,
     GEN,
 )
+
+LMPDA = 'LMPDA'
