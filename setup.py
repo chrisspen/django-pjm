@@ -25,6 +25,7 @@ setup(
     description = "A Django app for managing public PJM energy pricing data.",
     license = "MIT",
     url = "https://github.com/chrisspen/django-pjm",
+    #https://pypi.python.org/pypi?%3Aaction=list_classifiers
     classifiers = [
         'Environment :: Web Environment',
         'Intended Audience :: Developers',
@@ -32,6 +33,8 @@ setup(
         'Operating System :: OS Independent',
         'Programming Language :: Python',
         'Framework :: Django',
+        'License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)',
+        'Development Status :: 4 - Beta',
     ],
     zip_safe = False,
     install_requires = [
