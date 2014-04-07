@@ -104,7 +104,7 @@ class Node(models.Model):
     def save(self, *args, **kwargs):
         
         if self.id:
-            aggs = self.day_ahead_prices.all()\
+            aggs = self.prices.all()\
                 .aggregate(Min('start_datetime'), Max('start_datetime'))
             self.lmpda_start_datetime_min = aggs['start_datetime__min']
             self.lmpda_start_datetime_max = aggs['start_datetime__max']
@@ -133,36 +133,51 @@ class Node(models.Model):
         
         assert start_date <= end_date, 'Start date must be before end date.'
         while start_date <= end_date:
-            status, _ = LMPDAStatus.objects.get_or_create(date=start_date)
-            #TODO:add separate flags for loading other rows
-            if not status.loaded_zones:
-                cls.load_date(load_date=start_date, only_type=only_type)
-                status.loaded_zones = True
-                status.save()
+            for da in xrange(2):
+                status, _ = LMPDAStatus.objects.get_or_create(date=start_date, day_ahead=da)
+                #TODO:add separate flags for loading other rows
+                if not status.loaded_zones:
+                    cls.load_date(load_date=start_date, only_type=only_type, day_ahead=da)
+                    status.loaded_zones = True
+                    status.save()
             start_date += timedelta(days=1)
 
     @classmethod
     @commit_on_success
-    def load_date(cls, load_date, only_type=None):
+    def load_date(cls, load_date, only_type=None, day_ahead=True):
         print 'Loading PJM LMPDA data for %s.' % (load_date,)
+        
+        if day_ahead:
+            PATTERN1 = settings.PJM_LMPDA_URL
+            PATTERN2 = settings.PJM_LMPDA_URL2
+        else:
+            PATTERN1 = settings.PJM_LMP_URL
+            PATTERN2 = settings.PJM_LMP_URL2
         
         def get_data():
             
-            url = settings.PJM_LMPDA_URL.format(
+            url = PATTERN1.format(
                 year=load_date.year,
                 month=load_date.month,
                 day=load_date.day)
 #            print url
             #data = urllib2.urlopen(url1).readlines()[6:]
-            request = urllib2.Request(url)
-            print 'Downloading raw data from %s...' % (url,)
-            response = urllib2.urlopen(request)
-            content_type = response.info().getheader('Content-Type')
-#            print 'content_type1:',content_type
-            if content_type in ('application/octet-stream',):
-                return response.readlines()
+            try:
+                request = urllib2.Request(url)
+                print 'Downloading raw data from %s...' % (url,)
+                response = urllib2.urlopen(request)
+                content_type = response.info().getheader('Content-Type')
+    #            print 'content_type1:',content_type
+                if content_type in ('application/octet-stream',):
+                    return response.readlines()
+            except urllib2.HTTPError, e:
+                # The most recent files are CSV but older ones are deleted
+                # and replaced with ZIP archives, so if we get a 404 for the
+                # CSV then ignore it and try the ZIP.
+                if e.code != 404:
+                    raise
             
-            url = settings.PJM_LMPDA_URL2.format(
+            url = PATTERN2.format(
                 year=load_date.year,
                 month=load_date.month,
                 day=load_date.day)
@@ -177,8 +192,16 @@ class Node(models.Model):
                 return zip.read(zip.namelist()[0]).split('\n')
             
             raise Exception, 'No data found.'
+        
+        # Strip non-CSV header rows.
+        #TODO:change to find line containing "Start of Real Time LMP Data"?
+        if day_ahead:
+            # Day-ahead data has 6 extra header rows.
+            data = get_data()[6:]
+        else:
+            # Non-day-ahead data has 16 extra header rows.
+            data = get_data()[16:]
             
-        data = get_data()[6:]
         hours_line = data[0].strip().split(',')
         #print 'hours_line:',hours_line
         data = data[1:]
@@ -203,6 +226,8 @@ class Node(models.Model):
                 elif not line:
                     continue
                 elif line[0].strip().lower().startswith('end of day'):
+                    continue
+                elif line[0].strip().lower().startswith('end of real'):
                     continue
                 
                 dt, pnodeid, name, voltage, equipment, type_str, zone = line[:7]
@@ -262,6 +287,7 @@ class Node(models.Model):
                         node=node,
                         start_datetime=start_datetime,
                         end_datetime=end_datetime,
+                        day_ahead=bool(day_ahead),
                     )
                     if LMPDA.objects.filter(**price_key).exists():
                         #TODO:overwrite existing data?
@@ -269,6 +295,7 @@ class Node(models.Model):
                     else:
                         price_data.update(price_key)
                         price_data['hour'] = hour
+                        price_data['day_ahead'] = day_ahead
                         #print 'price_data:',price_data
                         LMPDA.objects.create(**price_data)
                 node.save()
@@ -287,9 +314,13 @@ class LMPDAStatus(models.Model):
     date = models.DateField(
         blank=False,
         null=False,
-        unique=True,
         editable=False,
         db_index=True)
+    
+    day_ahead = models.BooleanField(
+        default=True,
+        db_index=True,
+        editable=False)
     
     loaded_zones = models.BooleanField(
         default=False,
@@ -298,8 +329,11 @@ class LMPDAStatus(models.Model):
     
     class Meta:
         app_label = APP_LABEL
-        verbose_name = _('day-ahead locational marginal price import status')
-        verbose_name_plural = _('day-ahead locational marginal prices import statuses')
+        verbose_name = _('price import status')
+        verbose_name_plural = _('prices import statuses')
+        unique_together = (
+            ('date', 'day_ahead'),
+        )
     
 class LMPDA(models.Model):
     """
@@ -307,7 +341,7 @@ class LMPDA(models.Model):
     http://www.pjm.com/markets-and-operations/energy/day-ahead/lmpda.aspx
     """
     
-    node = models.ForeignKey('Node', related_name='day_ahead_prices')
+    node = models.ForeignKey('Node', related_name='prices')
     
     start_datetime = models.DateTimeField(
         blank=False,
@@ -351,15 +385,20 @@ class LMPDA(models.Model):
         max_digits=10,
         decimal_places=6)
     
+    day_ahead = models.BooleanField(
+        default=True,
+        db_index=True,
+        editable=False)
+    
     class Meta:
         app_label = APP_LABEL
-        verbose_name = _('day-ahead locational marginal price')
-        verbose_name_plural = _('day-ahead locational marginal prices')
+        verbose_name = _('price')
+        verbose_name_plural = _('prices')
         unique_together = (
-            ('node', 'start_datetime', 'end_datetime'),
+            ('node', 'start_datetime', 'end_datetime', 'day_ahead'),
         )
         ordering = (
-            'start_datetime', 'end_datetime',
+            'start_datetime', 'end_datetime', 'day_ahead',
         )
         
     natural_keys = ('node', 'start_datetime', 'end_datetime')

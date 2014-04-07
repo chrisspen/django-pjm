@@ -30,7 +30,7 @@ class NodeAdmin(admin.ModelAdmin):
     def da_prices_link(self, obj=None):
         if not obj:
             return ''
-        return view_related_link(obj, 'day_ahead_prices')
+        return view_related_link(obj, 'prices')
     da_prices_link.allow_tags = True
     da_prices_link.short_description = 'day-ahead prices'
     
@@ -67,9 +67,11 @@ class LMPDAAdmin(admin.ModelAdmin):
         'total',
         'congestion',
         'marginal_loss',
+        'day_ahead',
     )
     
     list_filter = (
+        'day_ahead',
     )
     
     search_fields = (
@@ -104,25 +106,28 @@ class LMPDAStatusAdmin(admin.ModelAdmin):
     list_display = (
         'date',
         'loaded_zones',
+        'day_ahead',
     )
     
     list_filter = (
         'date',
         'loaded_zones',
+        'day_ahead',
     )
     
     search_fields = (
     )
     
     def has_delete_permission(self, request, obj=None):
-        return False
+        #return False
+        return True
     
     def has_add_permission(self, request, obj=None):
         return False
     
     def get_actions(self, request):
         actions = super(LMPDAStatusAdmin, self).get_actions(request)
-        del actions['delete_selected']
+        #del actions['delete_selected']
         return actions
     
     def get_readonly_fields(self, request, obj=None):
