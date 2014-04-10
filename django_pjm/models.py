@@ -2,6 +2,7 @@ import csv
 import os
 import sys
 import zipfile
+import gzip
 import urllib2
 from collections import defaultdict
 from datetime import datetime, date, timedelta
@@ -24,10 +25,12 @@ try:
 except ImportError:
     APP_LABEL = 'django_pjm'
 
+from django_noaa.models import to_fahrenheit
+
 import settings as _settings
 import constants as c
 
-#REFERENCE_DIR = os.path.abspath(os.path.join(os.path.split(__file__)[0], 'reference'))
+REFERENCE_DIR = os.path.abspath(os.path.join(os.path.split(__file__)[0], 'reference'))
 
 class Node(models.Model):
     """
@@ -88,9 +91,17 @@ class Node(models.Model):
         db_index=True,
         editable=False)
     
+    station = models.ForeignKey(
+        'django_noaa.Station',
+        verbose_name=_('weather station'),
+        related_name='loads',
+        blank=True,
+        null=True)
+    
     class Meta:
         app_label = APP_LABEL
         ordering = (
+            'name',
         )
         
     natural_keys = ('id',)
@@ -99,7 +110,8 @@ class Node(models.Model):
         return (self.id,)
     
     def __unicode__(self):
-        return u'%s: %s' % (self.id, self.name)
+        #return u'%s: %s' % (self.id, self.name)
+        return self.name
 
     def save(self, *args, **kwargs):
         
@@ -134,6 +146,10 @@ class Node(models.Model):
         assert start_date <= end_date, 'Start date must be before end date.'
         while start_date <= end_date:
             for da in xrange(2):
+                # Non-day-ahead prices may be posted several days after
+                # their date. So don't even bother downloading it the day of.
+                if not da and start_date == date.today():
+                    continue
                 status, _ = LMPDAStatus.objects.get_or_create(date=start_date, day_ahead=da)
                 #TODO:add separate flags for loading other rows
                 if not status.loaded_zones:
@@ -192,27 +208,17 @@ class Node(models.Model):
                 return zip.read(zip.namelist()[0]).split('\n')
             
             raise Exception, 'No data found.'
-        
-        # Strip non-CSV header rows.
-        #TODO:change to find line containing "Start of Real Time LMP Data"?
-        if day_ahead:
-            # Day-ahead data has 6 extra header rows.
-            data = get_data()[6:]
-        else:
-            # Non-day-ahead data has 16 extra header rows.
-            data = get_data()[16:]
             
-        hours_line = data[0].strip().split(',')
-        #print 'hours_line:',hours_line
-        data = data[1:]
-        #print data[0]
-        #return
+        data = list(get_data())
         FIELD_MAP = {'TotalLMP':'total', 'CongestionPrice': 'congestion', 'MarginalLossPrice': 'marginal_loss'}
         total = len(data) - 1
         lines = csv.reader(data)
         lines = list(lines)
         i = 0
         headers = None
+        hours_line = None
+        start_found = False
+        price_fields = None
         for line in lines:
             i += 1
             if i == 1 or not i % 10:
@@ -220,7 +226,20 @@ class Node(models.Model):
                 sys.stdout.flush()
             try:
                 
-                if i == 1:
+                if not start_found and line:
+                    if day_ahead and line[0].strip() == 'Start of Day Ahead LMP Data':
+                        start_found = True
+                        hours_line = line
+                        continue
+                    elif not day_ahead and line[0].strip() == 'Start of Real Time LMP Data':
+                        start_found = True
+                        hours_line = line
+                        continue
+                    else:
+                        # Otherwise ignore the many extraneous pre-header rows.
+                        continue
+                
+                if headers is None:
                     headers = line
                     continue
                 elif not line:
@@ -229,6 +248,13 @@ class Node(models.Model):
                     continue
                 elif line[0].strip().lower().startswith('end of real'):
                     continue
+                
+#                print 'headers:',headers
+#                print 'hours_line:',hours_line
+#                print 'line:',line
+                price_fields = zip(headers[7:], hours_line[7:], line[7:])
+#                print 'price_fields:',price_fields
+#                raw_input('enter')
                 
                 dt, pnodeid, name, voltage, equipment, type_str, zone = line[:7]
                 raw_dt = dt
@@ -265,8 +291,6 @@ class Node(models.Model):
                     ),
                 )
                 #print 'node:',node
-                price_fields = zip(headers[7:], hours_line[7:], line[7:])
-                #print 'price_fields:',price_fields
                 price_dict = defaultdict(dict)
                 for name, hour, value in price_fields:
                     if not hour.strip():
@@ -411,3 +435,221 @@ class LMPDA(models.Model):
 
     def save(self, *args, **kwargs):
         super(LMPDA, self).save(*args, **kwargs)
+
+class Load(models.Model):
+    
+    node = models.ForeignKey(
+        'Node',
+        related_name='loads',
+        verbose_name=_('zone'))
+    
+    start_datetime = models.DateTimeField(
+        blank=False,
+        null=False,
+        db_index=True,
+        editable=False)
+    
+    end_datetime = models.DateTimeField(
+        blank=False,
+        null=False,
+        db_index=True,
+        editable=False)
+    
+    segment = models.CharField(
+        max_length=100,
+        blank=False,
+        null=False,
+        db_index=True,
+        editable=False)
+    
+    load = models.FloatField(
+        blank=False,
+        null=False,
+        db_index=True,
+        editable=False,
+        verbose_name=_('load factor'),
+        help_text=_('An estimate of the load on the power distribution system.'))
+    
+    class Meta:
+        app_label = APP_LABEL
+        unique_together = (
+            ('node', 'start_datetime', 'end_datetime', 'segment'),
+        )
+    
+    @classmethod
+    def calculate(cls, zone, *args, **kwargs):
+        getattr(cls, 'calculate_%s' % zone.lower())(*args, **kwargs)
+    
+    @classmethod
+    @commit_on_success
+    def calculate_ppl(cls, year, month, segment):
+        from django_noaa.models import Station
+        #station = Station.objects.get(wban=station_id)
+        
+        node = Node.objects.get(name='PPL', type=c.ZONE)
+        station = node.station
+        assert station, 'No weather station set for node %s.' % (node,)
+        assert station.load_temperatures, \
+            'No temperatures loaded for station %s.' % (station,)
+        
+        # Prior to 2013, the files contained a LOW_5/HIGH_5 column that was
+        # essentially unused. These columns were removed in the 2013 file
+        # and onwards.
+#        if year < 2013:
+#            raise NotImplementedError
+        
+        def compute_load_from_temp(temp0, temp_cutoffs, C0, coeffs):
+            if ((len(coeffs)==0) or (len(temp_cutoffs)!=len(coeffs))):
+                return 0
+            ret = C0;
+            low0 = 0;
+            for ii in xrange(0, len(temp_cutoffs)-1):
+                if temp0 < temp_cutoffs[ii]:
+                    return ret+coeffs[ii]*(temp0-low0)
+                else:
+                    ret += coeffs[ii]*(temp_cutoffs[ii]-low0)
+                    low0 = temp_cutoffs[ii]
+            return ret
+        
+        equations_fn = os.path.join(
+            REFERENCE_DIR,
+            'ppl/ProfileEquations_{year:04d}-cropped.txt.gz'.format(year=year))
+        print 'equations_fn:',equations_fn
+        assert os.path.isfile(equations_fn), 'File %s does not exist.' % (equations_fn,)
+        
+        equation_lines_by_day_hour = {}
+        total = gzip.open(equations_fn, 'rb').read().count('\n')
+        fin = csv.DictReader(gzip.open(equations_fn, 'rb'), delimiter='~')
+        i = 0
+        unique_days = set()
+        for row in fin:
+            i += 1
+            if i == 1 or not i % 10:
+                print '\rReading equations %i of %i %.02f%%.' % (i, total, i/float(total)*100),
+                sys.stdout.flush()
+            segment0 = row['PROFILE_CLASS']
+            year0 = int(float(row['YEAR']))
+            month0 = int(float(row['MONTH']))
+            if segment0 == segment and month0 == month and year0 == year:
+                day0 = int(float(row['DAY']))
+                unique_days.add(day0)
+                hour0 = int(float(row['HOUR'])/100.) - 1
+                equation_lines_by_day_hour[(day0, hour0)] = row
+        print
+
+        for day0 in sorted(unique_days):
+            date0 = date(year, month, day0)
+            print 'Processing date %s.' % (date0,)
+            loads0 = []
+            previous_temp = 0
+            for hour0 in xrange(24):
+                data = equation_lines_by_day_hour[(day0, hour0)]
+                temp_cutoffs = []
+                coeffs = []
+                
+                num = 5
+                # After 2013, more columns were removed?
+                #if (year>=2013): num=4;
+                
+                temp_cutoffs = [float(data[_]) for _ in sorted(data.iterkeys()) if _.startswith('HIGH_') and data[_].strip()]
+                coeffs = [float(data[_]) for _ in sorted(data.iterkeys()) if _.startswith('COEFF_') and data[_].strip()]
+                const_coeff = float(data['CONSTANT'])
+                
+                obs_start_datetime = datetime(year, month, day0, hour0).replace(tzinfo=UTC)
+                obs_end_datetime = (datetime(year, month, day0, hour0) + timedelta(hours=1)).replace(tzinfo=UTC)
+                
+                # Lookup temperature.
+                q = station.temperatures.filter(
+                    obs_start_datetime=obs_start_datetime,
+                    obs_end_datetime=obs_end_datetime)
+                temp0 = to_fahrenheit(q[0].t_hr_avg)
+                
+                # Some weather stations mis some measurements. In these
+                # instances, the value will be something outrageous
+                # like -99999. So we ignore this and use the previous value,
+                # assuming the missing temperature was probably close to that.
+                if temp0 < -100: temp0 = previous_temp
+                previous_temp = temp0
+                
+                # Calculate load for this hour.
+                load0 = compute_load_from_temp(
+                    temp0=temp0,
+                    temp_cutoffs=temp_cutoffs,
+                    C0=const_coeff,
+                    coeffs=coeffs,
+                )
+
+                key = dict(
+                    node=node,
+                    #station=station,
+                    start_datetime=obs_start_datetime,
+                    end_datetime=obs_end_datetime,
+                    segment=segment,
+                )
+                if Load.objects.filter(**key).exists():
+                    Load.objects.filter(**key).update(load=load0)
+                else:
+                    key['load'] = load0
+                    Load.objects.create(**key)
+
+class DailySummary(models.Model):
+    
+    id = models.CharField(
+        max_length=255,
+        blank=False,
+        null=False,
+        editable=False,
+        primary_key=True)
+    
+    node = models.ForeignKey(
+        'Node',
+        editable=False,
+        blank=False,
+        null=False,
+        db_column='node_id')
+
+    segment = models.CharField(
+        max_length=100,
+        editable=False,
+        blank=True,
+        null=True)
+    
+    start_date = models.DateField(
+        blank=False,
+        null=False,
+        editable=False)
+    
+    sum_load = models.FloatField(
+        editable=False,
+        verbose_name=_('sum load factor'))
+    
+    avg_total = models.FloatField(
+        blank=False,
+        null=False,
+        editable=False,
+        verbose_name=_('mean total real-time price'))
+    
+    avg_total_da = models.FloatField(
+        blank=False,
+        null=False,
+        editable=False,
+        verbose_name=_('mean total day-ahead price'))
+    
+    avg_total2 = models.FloatField(
+        blank=False,
+        null=False,
+        editable=False,
+        verbose_name=_('mean total real-time comprehensive price'))
+    
+    avg_total2_da = models.FloatField(
+        blank=False,
+        null=False,
+        editable=False,
+        verbose_name=_('mean total day-ahead comprehensive price'))
+    
+    class Meta:
+        app_label = APP_LABEL
+        managed = False
+        verbose_name_plural = _('summaries')
+        ordering = ('start_date',)
+        
