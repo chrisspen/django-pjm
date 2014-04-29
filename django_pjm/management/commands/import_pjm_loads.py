@@ -16,7 +16,7 @@ class Command(BaseCommand):
         make_option('--start-date', default=None),
         make_option('--end-date', default=None),
         make_option('--zone', default=None),
-        make_option('--segment', default=None),
+        make_option('--segments', default=None),
         #make_option('--only-type', default=None),
         #make_option('--auto-reprocess-days', default=0),
     )
@@ -34,13 +34,16 @@ class Command(BaseCommand):
             end_date = dateutil.parser.parse(end_date)
         else:
             end_date = date.today()
-            
+        
+        segments = [_ for _ in options['segments'].split(',') if _.strip()]
+        
         while start_date <= end_date:
-            models.Load.calculate(
-                year=start_date.year,
-                month=start_date.month,
-                zone=options['zone'],
-                segment=options['segment'],
-            )
+            for segment in segments:
+                models.Load.calculate(
+                    year=start_date.year,
+                    month=start_date.month,
+                    zone=options['zone'],
+                    segment=segment,
+                )
             start_date += monthdelta(1)
             

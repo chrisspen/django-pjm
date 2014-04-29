@@ -10,16 +10,12 @@ setup(
     name = 'django-pjm',
     version = django_pjm.__version__,
     packages = find_packages(),
-#    package_data = {
-#        'django_sec': [
-#            'templates/*.*',
-#            'templates/*/*.*',
-#            'templates/*/*/*.*',
-#            'static/*.*',
-#            'static/*/*.*',
-#            'static/*/*/*.*',
-#        ],
-#    },
+    package_data = {
+        'django_pjm': [
+            'reference/*.*',
+        ],
+    },
+    include_package_data=True,
     author = "Chris Spencer",
     author_email = "chrisspen@gmail.com",
     description = "A Django app for managing public PJM energy pricing data.",

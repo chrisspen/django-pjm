@@ -221,7 +221,7 @@ class Node(models.Model):
         price_fields = None
         for line in lines:
             i += 1
-            if i == 1 or not i % 10:
+            if i == 1 or not i % 10 or i == total:
                 print '\rProcessing line %i of %i %.02f%%.' % (i, total, i/float(total)*100),
                 sys.stdout.flush()
             try:
@@ -296,6 +296,9 @@ class Node(models.Model):
                     if not hour.strip():
                         continue
                     if not value.strip():
+                        continue
+                    if not hour.strip().isdigit():
+                        # Ignore [0-9]+\[DST\] columns.
                         continue
                     price_dict[int(hour)/100][FIELD_MAP[name.strip()]] = value
                 for hour, price_data in price_dict.iteritems():
@@ -391,7 +394,8 @@ class LMPDA(models.Model):
         db_index=True,
         editable=False,
         max_digits=10,
-        decimal_places=6)
+        decimal_places=6,
+        help_text=_('Price in $/MW'))
     
     congestion = models.DecimalField(
         blank=False,
@@ -399,7 +403,9 @@ class LMPDA(models.Model):
         db_index=True,
         editable=False,
         max_digits=10,
-        decimal_places=6)
+        decimal_places=6,
+        #help_text=_('Price in $/MW')
+    )
     
     marginal_loss = models.DecimalField(
         blank=False,
@@ -407,7 +413,9 @@ class LMPDA(models.Model):
         db_index=True,
         editable=False,
         max_digits=10,
-        decimal_places=6)
+        decimal_places=6,
+        #help_text=_('Price in $/MW')
+    )
     
     day_ahead = models.BooleanField(
         default=True,
@@ -547,10 +555,6 @@ class Load(models.Model):
                 temp_cutoffs = []
                 coeffs = []
                 
-                num = 5
-                # After 2013, more columns were removed?
-                #if (year>=2013): num=4;
-                
                 temp_cutoffs = [float(data[_]) for _ in sorted(data.iterkeys()) if _.startswith('HIGH_') and data[_].strip()]
                 coeffs = [float(data[_]) for _ in sorted(data.iterkeys()) if _.startswith('COEFF_') and data[_].strip()]
                 const_coeff = float(data['CONSTANT'])
@@ -562,6 +566,10 @@ class Load(models.Model):
                 q = station.temperatures.filter(
                     obs_start_datetime=obs_start_datetime,
                     obs_end_datetime=obs_end_datetime)
+                if not q.exists():
+                    raise Exception, ('No temperatures have been loaded for '\
+                        'datetime range %s to %s!') \
+                            % (obs_start_datetime, obs_end_datetime)
                 temp0 = to_fahrenheit(q[0].t_hr_avg)
                 
                 # Some weather stations mis some measurements. In these
@@ -627,29 +635,33 @@ class DailySummary(models.Model):
         blank=False,
         null=False,
         editable=False,
-        verbose_name=_('mean total real-time price'))
+        verbose_name=_('mean total real-time price'),
+        help_text=_('$/MW'))
     
     avg_total_da = models.FloatField(
         blank=False,
         null=False,
         editable=False,
-        verbose_name=_('mean total day-ahead price'))
+        verbose_name=_('mean total day-ahead price'),
+        help_text=_('$/MW'))
     
     avg_total2 = models.FloatField(
         blank=False,
         null=False,
         editable=False,
-        verbose_name=_('mean total real-time comprehensive price'))
+        verbose_name=_('mean total real-time comprehensive price'),
+        help_text=_('$/MW'))
     
     avg_total2_da = models.FloatField(
         blank=False,
         null=False,
         editable=False,
-        verbose_name=_('mean total day-ahead comprehensive price'))
+        verbose_name=_('mean total day-ahead comprehensive price'),
+        help_text=_('$/MW'))
     
     class Meta:
         app_label = APP_LABEL
         managed = False
-        verbose_name_plural = _('summaries')
+        verbose_name_plural = _('daily summaries')
         ordering = ('start_date',)
         
