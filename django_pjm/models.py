@@ -143,6 +143,7 @@ class Node(models.Model):
             end_date = date.today()
         print 'end_date:',end_date
         
+        #start_date=date(2010,11,7)#TODO:remove
         assert start_date <= end_date, 'Start date must be before end date.'
         while start_date <= end_date:
             for da in xrange(2):
