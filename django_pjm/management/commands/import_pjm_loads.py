@@ -26,12 +26,14 @@ class Command(BaseCommand):
         start_date = (options['start_date'] or '').strip()
         if start_date:
             start_date = dateutil.parser.parse(start_date)
+            start_date = date(start_date.year, start_date.month, start_date.day)
         else:
             start_date = date.today() - monthdelta(1)
             
         end_date = (options['end_date'] or '').strip()
         if end_date:
             end_date = dateutil.parser.parse(end_date)
+            end_date = date(end_date.year, end_date.month, end_date.day)
         else:
             end_date = date.today()
         
@@ -39,6 +41,7 @@ class Command(BaseCommand):
         
         while start_date <= end_date:
             for segment in segments:
+                print 'Calculating for segment %s on start date %s.' % (segment, start_date)
                 models.Load.calculate(
                     year=start_date.year,
                     month=start_date.month,
